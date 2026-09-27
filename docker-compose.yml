@@ -1,0 +1,12 @@
+services:
+  immich-print-picker:
+    build: .
+    environment:
+      IMMICH_URL: ${IMMICH_URL}
+      IMMICH_API_KEY: ${IMMICH_API_KEY}
+      IMMICH_VERIFY_SSL: ${IMMICH_VERIFY_SSL:-true}
+      DOWNLOAD_DIR: /downloads
+    volumes:
+      - ./downloads:/downloads
+    stdin_open: true
+    tty: true
