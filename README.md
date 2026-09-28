@@ -380,7 +380,7 @@ For a trusted home-network setup with a deliberately self-signed certificate, yo
 IMMICH_VERIFY_SSL=false
 ```
 
-Using a valid certificate is recommended whenever possible.
+When `IMMICH_VERIFY_SSL=false`, Immich Print Picker suppresses urllib3's expected `InsecureRequestWarning` to keep the interactive output clean. Certificate verification is still disabled, so use this option only on networks you trust.\n\nUsing a valid certificate is recommended whenever possible.
 
 ---
 
