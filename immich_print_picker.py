@@ -9,6 +9,7 @@ from typing import Any
 import requests
 from requests import Response, Session
 from requests.exceptions import RequestException
+from urllib3.exceptions import InsecureRequestWarning
 
 
 APP_NAME = "Immich Print Picker"
@@ -31,6 +32,9 @@ class ImmichClient:
             }
         )
         self.verify_ssl = verify_ssl
+
+        if not verify_ssl:
+            requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
 
     def _request(self, method: str, path: str, **kwargs: Any) -> Response:
         response = self.session.request(
