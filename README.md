@@ -31,6 +31,7 @@ A photo with several likes is downloaded **only once**.
 - ❤️ Selects assets with **at least one like**, regardless of who liked them
 - 🔁 Automatically removes duplicate selections
 - 📦 Downloads the **original files** through Immich's API
+- 📁 Configurable export folder through `.env`
 - 🧩 Supports large selections split by Immich into multiple ZIP archives
 - 🐍 Runs directly with Python
 - 🐳 Fully Docker-friendly
@@ -59,9 +60,25 @@ Edit `.env`:
 ```dotenv
 IMMICH_URL=https://immich.example.com
 IMMICH_API_KEY=your-api-key-here
+DOWNLOAD_DIR=./downloads
+IMMICH_VERIFY_SSL=true
 ```
 
 > `IMMICH_URL` can be either your normal Immich URL or the URL ending in `/api`.
+
+`DOWNLOAD_DIR` controls where exported ZIP archives are saved **on the host machine** when using Docker Compose.
+
+For example:
+
+```dotenv
+DOWNLOAD_DIR=/mnt/photos/print-exports
+```
+
+or:
+
+```dotenv
+DOWNLOAD_DIR=./exports
+```
 
 ### 3. Start the picker
 
@@ -69,11 +86,7 @@ IMMICH_API_KEY=your-api-key-here
 docker compose run --rm immich-print-picker
 ```
 
-The downloaded ZIP files will appear in:
-
-```text
-./downloads/
-```
+The downloaded ZIP files will appear in the folder configured by `DOWNLOAD_DIR`.
 
 ---
 
@@ -109,11 +122,17 @@ docker build -t immich-print-picker .
 docker run --rm -it \
   -e IMMICH_URL="https://immich.example.com" \
   -e IMMICH_API_KEY="your-api-key-here" \
-  -v "$(pwd)/downloads:/downloads" \
+  -v "/path/on/host:/downloads" \
   immich-print-picker
 ```
 
 The container is intentionally interactive because the tool asks you which album to process.
+
+When using plain `docker run`, choose the host export folder with the left side of the volume mapping:
+
+```text
+/path/on/host:/downloads
+```
 
 ### Docker Compose
 
@@ -123,11 +142,19 @@ Create `.env` from the included example:
 cp .env.example .env
 ```
 
-Then run:
+Then choose the host export directory:
+
+```dotenv
+DOWNLOAD_DIR=/mnt/photos/print-exports
+```
+
+and run:
 
 ```bash
 docker compose run --rm immich-print-picker
 ```
+
+Docker Compose mounts that host folder into the container at `/downloads`.
 
 ---
 
@@ -157,14 +184,16 @@ Linux/macOS:
 ```bash
 export IMMICH_URL="https://immich.example.com"
 export IMMICH_API_KEY="your-api-key-here"
+export DOWNLOAD_DIR="./downloads"
 ```
 
 Optional:
 
 ```bash
-export DOWNLOAD_DIR="./downloads"
 export IMMICH_VERIFY_SSL="true"
 ```
+
+When running without Docker, `DOWNLOAD_DIR` is used directly by the Python script as the destination folder.
 
 ### Run
 
@@ -214,7 +243,7 @@ If the selected album has no liked assets:
 |---|---:|---|---|
 | `IMMICH_URL` | ✅ | — | Base URL of your Immich server |
 | `IMMICH_API_KEY` | ✅ | — | Immich API key |
-| `DOWNLOAD_DIR` | ❌ | `./downloads` locally, `/downloads` in Docker | Where ZIP archives are saved |
+| `DOWNLOAD_DIR` | ❌ | `./downloads` | Export folder. With Docker Compose this is a host path; without Docker it is used directly by Python |
 | `IMMICH_VERIFY_SSL` | ❌ | `true` | Set to `false` only if you intentionally use an untrusted/self-signed certificate |
 
 Example `.env`:
@@ -222,8 +251,31 @@ Example `.env`:
 ```dotenv
 IMMICH_URL=https://immich.example.com
 IMMICH_API_KEY=replace-me
+DOWNLOAD_DIR=./downloads
 IMMICH_VERIFY_SSL=true
 ```
+
+### Export folder examples
+
+Relative path:
+
+```dotenv
+DOWNLOAD_DIR=./exports
+```
+
+Absolute Linux path:
+
+```dotenv
+DOWNLOAD_DIR=/mnt/storage/immich-print-exports
+```
+
+NAS-mounted folder:
+
+```dotenv
+DOWNLOAD_DIR=/mnt/photos/to-print
+```
+
+> When Docker Compose is used, this path must be accessible to the Docker host.
 
 ---
 
@@ -239,7 +291,7 @@ It:
 4. Collects all non-null asset IDs.
 5. Deduplicates them, so multiple likes on the same photo still produce one download.
 6. Asks Immich for download archive information.
-7. Streams the ZIP archive(s) to disk.
+7. Streams the ZIP archive(s) to the configured export folder.
 
 The project does **not** connect directly to Immich's PostgreSQL database.
 
@@ -247,7 +299,19 @@ The project does **not** connect directly to Immich's PostgreSQL database.
 
 ## 📁 Output
 
-By default, archive names follow this format:
+By default, exports are written to:
+
+```text
+./downloads/
+```
+
+You can change this with:
+
+```dotenv
+DOWNLOAD_DIR=/your/export/folder
+```
+
+Archive names follow this format:
 
 ```text
 <Album name> - print picks.zip
@@ -299,6 +363,14 @@ The Immich user associated with the API key cannot access any albums.
 ### No liked assets are found
 
 Make sure the likes are attached to individual photos/videos inside the album. A like on the album itself is intentionally ignored.
+
+### Export folder errors
+
+If Docker cannot create or write files in `DOWNLOAD_DIR`, make sure:
+
+- the folder exists or Docker can create it;
+- the Docker host has permission to access it;
+- the path is valid on the machine running Docker.
 
 ### Self-signed HTTPS certificate
 

@@ -7,6 +7,6 @@ services:
       IMMICH_VERIFY_SSL: ${IMMICH_VERIFY_SSL:-true}
       DOWNLOAD_DIR: /downloads
     volumes:
-      - ./downloads:/downloads
+      - "${DOWNLOAD_DIR:-./downloads}:/downloads"
     stdin_open: true
     tty: true
