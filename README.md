@@ -4,7 +4,7 @@
 
 **Immich Print Picker** is a small command-line utility built for a simple workflow: multiple people browse a shared Immich album, like the photos they want to keep or print, and then one command downloads every asset that received **at least one like**.
 
-No tags to maintain. No duplicate albums. No manual cross-user selection. Just **like → pick → download**.
+No tags to maintain. No duplicate albums. No manual cross-user selection. Just **like → pick → download → reset**.
 
 ---
 
@@ -19,8 +19,9 @@ Likes already work naturally as a lightweight voting/selection mechanism inside 
 3. 🖨️ Run Immich Print Picker.
 4. 📚 Choose the album.
 5. 📦 The tool downloads every uniquely liked asset as one or more ZIP archives.
+6. 🧹 When you're done, you can optionally remove all asset likes from the album and start fresh.
 
-A photo with several likes is downloaded **only once**.
+A photo with several likes is downloaded **only once**. Resetting likes is always an explicit, confirmed action.
 
 ---
 
@@ -31,12 +32,15 @@ A photo with several likes is downloaded **only once**.
 - ❤️ Selects assets with **at least one like**, regardless of who liked them
 - 🔁 Automatically removes duplicate selections
 - 📦 Downloads the **original files** through Immich's API
+- 🧹 Can reset **all asset likes** in an album after printing
+- ✅ Supports a safe **download first, reset afterwards** workflow
+- ⚠️ Requires typing `RESET` before any destructive reset
 - 📁 Configurable export folder through `.env`
 - 🧩 Supports large selections split by Immich into multiple ZIP archives
 - 🐍 Runs directly with Python
 - 🐳 Fully Docker-friendly
 - 🔐 Uses an Immich API key — no password is stored
-- 🛡️ Read/download only: it does not modify albums, assets, likes, or metadata
+- 🛡️ Does not modify albums, assets, or metadata; likes are only changed when you explicitly choose a reset action
 
 ---
 
@@ -94,13 +98,17 @@ The downloaded ZIP files will appear in the folder configured by `DOWNLOAD_DIR`.
 
 In Immich, create an API key for the user who should run the picker.
 
-The recommended minimum permissions are:
+The recommended permissions are:
 
 ```text
 album.read
 activity.read
+activity.delete
 asset.download
+user.read
 ```
+
+`activity.delete` and `user.read` are required only for the like-reset feature. If you only want to download print picks, the original read/download permissions are enough.
 
 The API key can only work with albums and assets that its Immich user is allowed to access.
 
@@ -220,13 +228,34 @@ A typical session looks like this:
 Choose an album number (or q to quit): 1
 
 🔎 Looking for liked assets in “Summer Holiday”...
-❤️  Found 37 unique liked asset(s).
+❤️  Found 37 unique liked asset(s) with 52 total like(s).
+
+What would you like to do?
+
+  1. 📦 Download print picks
+  2. 🧹 Reset all likes
+  3. 📦🧹 Download print picks, then reset all likes
+  q. Quit
+
+Choose an action: 3
+
 📦 Asking Immich to prepare the original files...
 ⬇️  Downloading 184.3 MB in 1 archive(s) to /downloads
-
    ✅ Saved: /downloads/Summer Holiday - print picks.zip
 
-✨ Done. Your print picks are ready.
+✨ Download complete. Your print picks are ready.
+
+The download completed successfully.
+
+⚠️  WARNING: this is a destructive action.
+   It will remove 52 like(s) from 37 asset(s) in “Summer Holiday”.
+   This can include likes created by other users.
+   The operation cannot be undone by Immich Print Picker.
+
+Type RESET to continue: RESET
+
+🧹 Removing 52 like(s)...
+✅ All asset likes were removed from the album.
 ```
 
 If the selected album has no liked assets:
@@ -292,6 +321,8 @@ It:
 5. Deduplicates them, so multiple likes on the same photo still produce one download.
 6. Asks Immich for download archive information.
 7. Streams the ZIP archive(s) to the configured export folder.
+8. If requested, verifies that the API key belongs to the album owner before deleting likes.
+9. Deletes the album's asset-level like activities only after explicit confirmation.
 
 The project does **not** connect directly to Immich's PostgreSQL database.
 
@@ -329,6 +360,30 @@ Original filenames inside the archives are produced by Immich.
 
 ---
 
+## 🧹 Resetting likes
+
+After a print/export cycle, you can reset the album so it is ready for a new selection.
+
+The tool offers:
+
+- **Download print picks** — export only; likes stay untouched.
+- **Reset all likes** — remove every asset-level like in the selected album.
+- **Download print picks, then reset all likes** — download first, and only offer the reset after all archives were saved successfully.
+
+Before deleting anything, the tool requires:
+
+1. an API key with `activity.delete` and `user.read`;
+2. the API key user to be the **owner of the selected album**;
+3. an explicit confirmation by typing `RESET`.
+
+The album-owner check is important because Immich allows an album owner to remove other users' activities, while a non-owner can only remove activities they are allowed to delete. Immich Print Picker blocks the full reset in advance when it cannot safely remove everyone's likes.
+
+Only **asset-level likes** are reset. Album-level likes and comments are left untouched.
+
+> ⚠️ Resetting likes is destructive. Immich Print Picker cannot restore deleted likes.
+
+---
+
 ## 🛡️ Privacy & security
 
 - Your Immich credentials stay on your machine/server.
@@ -356,6 +411,21 @@ The API key is invalid, expired, or not being accepted by the server.
 
 The API key is missing one of the required permissions, or its user does not have access to the requested album/assets.
 
+### Reset says additional permissions are required
+
+For the reset feature, add:
+
+```text
+activity.delete
+user.read
+```
+
+to the API key.
+
+### Reset says the API key must belong to the album owner
+
+Immich only allows a full cross-user like reset when the authenticated user owns the album. Use an API key created by the album owner. No likes are removed when this preflight check fails.
+
 ### No albums are listed
 
 The Immich user associated with the API key cannot access any albums.
@@ -380,7 +450,9 @@ For a trusted home-network setup with a deliberately self-signed certificate, yo
 IMMICH_VERIFY_SSL=false
 ```
 
-When `IMMICH_VERIFY_SSL=false`, Immich Print Picker suppresses urllib3's expected `InsecureRequestWarning` to keep the interactive output clean. Certificate verification is still disabled, so use this option only on networks you trust.\n\nUsing a valid certificate is recommended whenever possible.
+When `IMMICH_VERIFY_SSL=false`, Immich Print Picker suppresses urllib3's expected `InsecureRequestWarning` to keep the interactive output clean. Certificate verification is still disabled, so use this option only on networks you trust.
+
+Using a valid certificate is recommended whenever possible.
 
 ---
 
@@ -410,7 +482,7 @@ Useful contributions include:
 - tests;
 - packaging improvements.
 
-Please keep the project focused on the core idea: **use shared-album likes as a simple selection mechanism and export the selected originals**.
+Please keep the project focused on the core idea: **use shared-album likes as a simple selection mechanism, export the selected originals, and optionally reset the selection for the next print cycle**.
 
 ---
 
