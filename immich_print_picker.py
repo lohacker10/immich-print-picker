@@ -63,7 +63,7 @@ class ImmichClient:
             raise RuntimeError("Unexpected response from Immich while listing albums.")
         return data
 
-    def get_liked_asset_ids(self, album_id: str) -> list[str]:
+    def get_like_activities(self, album_id: str) -> list[dict[str, Any]]:
         response = self._request(
             "GET",
             "/activities",
@@ -77,14 +77,15 @@ class ImmichClient:
         if not isinstance(activities, list):
             raise RuntimeError("Unexpected response from Immich while reading likes.")
 
-        # Album-level likes have assetId == null. We only want liked photos/videos.
-        return sorted(
-            {
-                activity["assetId"]
-                for activity in activities
-                if isinstance(activity, dict) and activity.get("assetId")
-            }
-        )
+        # Album-level likes have assetId == null. Print Picker only works with
+        # likes attached to individual photos/videos.
+        return [
+            activity
+            for activity in activities
+            if isinstance(activity, dict)
+            and activity.get("id")
+            and activity.get("assetId")
+        ]
 
     def get_download_info(self, asset_ids: list[str]) -> dict[str, Any]:
         response = self._request(
@@ -138,9 +139,10 @@ class ImmichClient:
         if expected > 0:
             print()
         else:
-            print(
-                f"   Part {part}/{total_parts}: downloaded {format_bytes(downloaded)}"
-            )
+            print(f"   Part {part}/{total_parts}: downloaded {format_bytes(downloaded)}")
+
+    def delete_activity(self, activity_id: str) -> None:
+        self._request("DELETE", f"/activities/{activity_id}")
 
 
 def env_bool(name: str, default: bool = True) -> bool:
@@ -206,9 +208,109 @@ def choose_album(albums: list[dict[str, Any]]) -> dict[str, Any] | None:
         print("Please enter a number from the list.")
 
 
+def choose_action() -> str | None:
+    print("\nWhat would you like to do?\n")
+    print("  1. 📦 Download print picks")
+    print("  2. 🧹 Reset all likes")
+    print("  3. 📦🧹 Download print picks, then reset all likes")
+    print("  q. Quit")
+
+    while True:
+        choice = input("\nChoose an action: ").strip().lower()
+
+        if choice in {"q", "quit", "exit"}:
+            return None
+        if choice == "1":
+            return "download"
+        if choice == "2":
+            return "reset"
+        if choice == "3":
+            return "download_reset"
+
+        print("Please choose 1, 2, 3, or q.")
+
+
+def confirm_reset(album_name: str, total_likes: int, unique_assets: int) -> bool:
+    print()
+    print("⚠️  WARNING: this is a destructive action.")
+    print(
+        f'   It will remove {total_likes} like(s) from {unique_assets} asset(s) '
+        f'in “{album_name}”.'
+    )
+    print("   This can include likes created by other users.")
+    print("   The operation cannot be undone by Immich Print Picker.")
+    confirmation = input("\nType RESET to continue: ").strip()
+    return confirmation == "RESET"
+
+
+def download_print_picks(
+    client: ImmichClient,
+    asset_ids: list[str],
+    album_name: str,
+    download_dir: Path,
+) -> None:
+    print("\n📦 Asking Immich to prepare the original files...")
+
+    info = client.get_download_info(asset_ids)
+    archives = info.get("archives") or []
+    total_size = int(info.get("totalSize") or 0)
+
+    if not archives:
+        raise RuntimeError("Immich returned no downloadable archives.")
+
+    download_dir.mkdir(parents=True, exist_ok=True)
+
+    base_name = f"{safe_filename(album_name)} - print picks"
+    print(
+        f"⬇️  Downloading {format_bytes(total_size)} "
+        f"in {len(archives)} archive(s) to {download_dir.resolve()}"
+    )
+
+    for index, archive in enumerate(archives, start=1):
+        part_asset_ids = archive.get("assetIds") or []
+        if not part_asset_ids:
+            continue
+
+        suffix = "" if len(archives) == 1 else f" - part {index}"
+        destination = download_dir / f"{base_name}{suffix}.zip"
+
+        client.download_archive(
+            part_asset_ids,
+            base_name,
+            destination,
+            index,
+            len(archives),
+        )
+        print(f"   ✅ Saved: {destination}")
+
+    print("\n✨ Download complete. Your print picks are ready.")
+
+
+def reset_likes(client: ImmichClient, activities: list[dict[str, Any]]) -> None:
+    total = len(activities)
+    removed = 0
+
+    print(f"\n🧹 Removing {total} like(s)...")
+
+    for index, activity in enumerate(activities, start=1):
+        try:
+            client.delete_activity(str(activity["id"]))
+        except Exception as exc:
+            raise RuntimeError(
+                f"Like reset stopped after {removed}/{total} successful deletions. "
+                f"The album may now be partially reset.\n{exc}"
+            ) from exc
+
+        removed += 1
+        print(f"\r   Removed {index}/{total} like(s)", end="", flush=True)
+
+    print()
+    print("✅ All asset likes were removed from the album.")
+
+
 def main() -> int:
     print("🖨️  Immich Print Picker")
-    print("   Export the photos your group liked in a shared Immich album.")
+    print("   Export and manage the photos your group liked in a shared Immich album.")
 
     immich_url = os.getenv("IMMICH_URL", "").strip()
     api_key = os.getenv("IMMICH_API_KEY", "").strip()
@@ -232,53 +334,43 @@ def main() -> int:
             print("\nBye! 👋")
             return 0
 
-        album_id = album["id"]
+        album_id = str(album["id"])
         album_name = str(album.get("albumName") or "Untitled album")
 
         print(f"\n🔎 Looking for liked assets in “{album_name}”...")
-        asset_ids = client.get_liked_asset_ids(album_id)
+        activities = client.get_like_activities(album_id)
 
-        if not asset_ids:
+        if not activities:
             print("⚠️  No liked photos or videos were found in this album.")
             return 0
 
-        print(f"❤️  Found {len(asset_ids)} unique liked asset(s).")
-        print("📦 Asking Immich to prepare the original files...")
-
-        info = client.get_download_info(asset_ids)
-        archives = info.get("archives") or []
-        total_size = int(info.get("totalSize") or 0)
-
-        if not archives:
-            print("⚠️  Immich returned no downloadable archives.")
-            return 0
-
-        download_dir.mkdir(parents=True, exist_ok=True)
-
-        base_name = f"{safe_filename(album_name)} - print picks"
+        asset_ids = sorted({str(activity["assetId"]) for activity in activities})
         print(
-            f"⬇️  Downloading {format_bytes(total_size)} "
-            f"in {len(archives)} archive(s) to {download_dir.resolve()}"
+            f"❤️  Found {len(asset_ids)} unique liked asset(s) "
+            f"with {len(activities)} total like(s)."
         )
 
-        for index, archive in enumerate(archives, start=1):
-            part_asset_ids = archive.get("assetIds") or []
-            if not part_asset_ids:
-                continue
+        action = choose_action()
+        if action is None:
+            print("\nBye! 👋")
+            return 0
 
-            suffix = "" if len(archives) == 1 else f" - part {index}"
-            destination = download_dir / f"{base_name}{suffix}.zip"
+        if action in {"download", "download_reset"}:
+            download_print_picks(client, asset_ids, album_name, download_dir)
 
-            client.download_archive(
-                part_asset_ids,
-                base_name,
-                destination,
-                index,
-                len(archives),
-            )
-            print(f"   ✅ Saved: {destination}")
+        if action == "reset":
+            if not confirm_reset(album_name, len(activities), len(asset_ids)):
+                print("\nReset cancelled.")
+                return 0
+            reset_likes(client, activities)
 
-        print("\n✨ Done. Your print picks are ready.")
+        if action == "download_reset":
+            print("\nThe download completed successfully.")
+            if not confirm_reset(album_name, len(activities), len(asset_ids)):
+                print("\nLike reset skipped. Your downloaded files are safe.")
+                return 0
+            reset_likes(client, activities)
+
         return 0
 
     except (RequestException, RuntimeError, ValueError, KeyError) as exc:
