@@ -87,6 +87,21 @@ class ImmichClient:
             and activity.get("assetId")
         ]
 
+    def get_api_key_permissions(self) -> set[str]:
+        response = self._request("GET", "/api-keys/me")
+        data = response.json()
+        permissions = data.get("permissions") if isinstance(data, dict) else None
+        if not isinstance(permissions, list):
+            raise RuntimeError("Unexpected response from Immich while reading API key permissions.")
+        return {str(permission) for permission in permissions}
+
+    def get_current_user(self) -> dict[str, Any]:
+        response = self._request("GET", "/users/me")
+        data = response.json()
+        if not isinstance(data, dict) or not data.get("id"):
+            raise RuntimeError("Unexpected response from Immich while reading the current user.")
+        return data
+
     def get_download_info(self, asset_ids: list[str]) -> dict[str, Any]:
         response = self._request(
             "POST",
@@ -230,6 +245,41 @@ def choose_action() -> str | None:
         print("Please choose 1, 2, 3, or q.")
 
 
+def ensure_reset_capability(client: ImmichClient, album: dict[str, Any]) -> None:
+    permissions = client.get_api_key_permissions()
+    has_all = "all" in permissions
+
+    required = {"activity.delete", "user.read"}
+    missing = sorted(permission for permission in required if not has_all and permission not in permissions)
+    if missing:
+        raise RuntimeError(
+            "Reset requires these additional API key permission(s): "
+            + ", ".join(missing)
+            + ". No likes were removed."
+        )
+
+    current_user = client.get_current_user()
+    current_user_id = str(current_user["id"])
+
+    owner_id = None
+    for album_user in album.get("albumUsers") or []:
+        if album_user.get("role") == "owner":
+            user = album_user.get("user") or {}
+            owner_id = user.get("id")
+            break
+
+    if not owner_id:
+        raise RuntimeError(
+            "Could not determine the album owner. No likes were removed."
+        )
+
+    if str(owner_id) != current_user_id:
+        raise RuntimeError(
+            "Resetting every user's likes requires the API key to belong to "
+            "the owner of this album. No likes were removed."
+        )
+
+
 def confirm_reset(album_name: str, total_likes: int, unique_assets: int) -> bool:
     print()
     print("⚠️  WARNING: this is a destructive action.")
@@ -354,6 +404,9 @@ def main() -> int:
         if action is None:
             print("\nBye! 👋")
             return 0
+
+        if action in {"reset", "download_reset"}:
+            ensure_reset_capability(client, album)
 
         if action in {"download", "download_reset"}:
             download_print_picks(client, asset_ids, album_name, download_dir)
